@@ -1,0 +1,20 @@
+version: '3'
+
+services:
+  bing-redis:
+    image: redis
+    environment:
+      - BOT_TOKEN=token
+      - CHAT_ID=12345
+    volumes:
+      - ./redis:/data
+    entrypoint: entrypoint: redis-server --appendonly yes
+    
+  bing-bot:
+    build: .
+    restart: unless-stopped
+    command: /bot
+    links:
+      - bing-redis:redis
+
+  

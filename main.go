@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,16 +18,19 @@ var (
 	nextSleep  = 3 * time.Minute
 	retrySleep = 1 * time.Minute
 
-	pathToMD5 = map[string][16]byte{}
-
 	bingBase = "https://www.bing.com"
 	bingMkts = []string{"fr-dz", "es-ar", "en-au", "nl-be", "fr-be", "es-bo", "bs-ba", "pt-br", "en-ca", "fr-ca", "cs-cz", "es-cl", "es-co", "es-cr", "sr-latn-me", "en-cy", "da-dk", "de-de", "es-ec", "et-ee", "en-eg", "es-sv", "es-es", "fr-fr", "es-gt", "en-gulf", "es-hn", "en-hk", "hr-hr", "en-in", "id-id", "en-ie", "is-is", "it-it", "en-jo", "lv-lv", "en-lb", "lt-lt", "hu-hu", "en-my", "en-mt", "es-mx", "fr-ma", "nl-nl", "en-nz", "es-ni", "en-ng", "nb-no", "de-at", "en-pk", "es-pa", "es-py", "es-pe", "en-ph", "pl-pl", "pt-pt", "es-pr", "es-do", "ro-md", "ro-ro", "en-sa", "de-ch", "en-sg", "sl-si", "sk-sk", "en-za", "sr-latn-rs", "en-lk", "fr-ch", "fi-fi", "sv-se", "fr-tn", "tr-tr", "en-gb", "en-us", "es-uy", "es-ve", "vi-vn", "el-gr", "ru-by", "bg-bg", "ru-kz", "ru-ru", "uk-ua", "he-il", "ar-iq", "ar-sa", "ar-ly", "ar-eg", "ar-gulf", "th-th", "ko-kr", "zh-cn", "zh-tw", "ja-jp", "zh-hk"} // https://www.microsoft.com/en-in/locale.aspx
 
 	token  = ""
-	chatID = ""
+	chatID = "" // get by https://api.telegram.org/bot{token}/getUpdates
 )
 
 func init() {
+	// redis is optional
+	if err := r.Info(ctx).Err(); err == nil {
+		p = true
+	}
+
 	token = os.Getenv("BOT_TOKEN")
 	chatID = os.Getenv("CHAT_ID")
 	checkTelegram()
@@ -103,10 +107,8 @@ type BingRsp struct {
 	} `json:"tooltips"`
 }
 
-func imageDuplicate(path string) (dup bool, err error) {
-	dup = false
-	if _, found := pathToMD5[path]; found {
-		dup = true
+func imageDuplicate(path string) (dup bool, hash string, err error) {
+	if dup, err = strSeen(path); dup || err != nil {
 		return
 	}
 
@@ -122,16 +124,9 @@ func imageDuplicate(path string) (dup bool, err error) {
 		return
 	}
 
-	// cache image->hash here
-	hash := md5.Sum(body)
-	for _, h := range pathToMD5 {
-		if hash == h {
-			dup = true
-			pathToMD5[path] = hash
-			return
-		}
-	}
-	pathToMD5[path] = hash
+	h := md5.Sum(body)
+	hash = hex.EncodeToString(h[:])
+	dup, err = strSeen(hash)
 	return
 }
 
@@ -142,10 +137,12 @@ func postBingCh(msg string) error {
 	}
 	ip.Text = msg
 	ip.ChatID = chatID
+
 	data, err := json.Marshal(ip)
 	if err != nil {
 		return err
 	}
+
 	url := fmt.Sprintf("https://api.telegram.org/bot%v/sendMessage", token)
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(data))
 	if err != nil {
@@ -167,6 +164,7 @@ func dailyBing() {
 	remote := "https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=1&mkt=" // 1 is the image count
 
 	path := ""
+	hash := ""
 	msg := ""
 	i := 0 // market index
 	for {
@@ -188,12 +186,13 @@ func dailyBing() {
 		}
 
 		path = r.Images[0].URL
-		if dup, err := imageDuplicate(path); err != nil {
+		if dup, h, err := imageDuplicate(path); err != nil {
 			goto retry
 		} else {
 			if dup {
 				goto nextMkt
 			}
+			hash = h
 		}
 
 		msg = fmt.Sprintf("%v\n%v\n%v", r.Images[0].Startdate, r.Images[0].Copyright, bingBase+path)
@@ -212,6 +211,7 @@ func dailyBing() {
 	retry:
 		sleep = retrySleep
 	sleep:
+		setSeen(path, hash) // only set after successful post
 		time.Sleep(sleep)
 	}
 }

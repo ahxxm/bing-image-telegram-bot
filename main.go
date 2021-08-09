@@ -186,6 +186,7 @@ func dailyBing() {
 		}
 
 		path = r.Images[0].URL
+		path = strings.ReplaceAll(path, "1920x1080", "UHD")
 		if dup, h, err := imageDuplicate(path); err != nil {
 			goto retry
 		} else {
